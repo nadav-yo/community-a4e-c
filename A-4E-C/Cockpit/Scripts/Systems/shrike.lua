@@ -8,6 +8,7 @@
 dofile(LockOn_Options.common_script_path.."devices_defs.lua")
 dofile(LockOn_Options.script_path.."devices.lua")
 dofile(LockOn_Options.script_path.."Systems/electric_system_api.lua")
+dofile(LockOn_Options.script_path.."Systems/adi_needles_api.lua")
 dofile(LockOn_Options.script_path.."command_defs.lua")
 dofile(LockOn_Options.script_path.."utils.lua")
 
@@ -31,6 +32,8 @@ local shrike_lock = false
 local target_expire_time = 3.0
 local shrike_lock_volume = 0
 -- local shrike_sidewinder_volume = 0.5
+
+local shrike_seeker_installed = true -- if shrike seeker is installed, ADI needles should also be set to point to the target location
 
 shrike_armed_param = get_param_handle("SHRIKE_ARMED")
 shrike_sidewinder_volume = get_param_handle("SHRIKE_SIDEWINDER_VOLUME")
@@ -73,11 +76,11 @@ function update()
     -- TODO: Check for AFT MON AC BUS and MONITORED DC BUS
     if get_elec_aft_mon_ac_ok() and get_elec_mon_dc_ok() then
     
-        for i = 1, maxContacts do
+        -- for i = 1, maxContacts do
             -- debug_print(i.." - Signal: "..tostring(contacts[i].signal_h:get()).." Power: "..tostring(contacts[i].power_h:get()).." General Type: "..tostring(contacts[i].general_type_h:get()).." Azimuth: "..tostring(math.rad(contacts[i].azimuth_h:get())).." Elevation: "..tostring(contacts[i].elevation_h:get()).." Unit Type: "..tostring(contacts[i].unit_type_h:get()).." Priority: "..tostring(contacts[i].priority_h:get()).." Time: "..tostring(contacts[i].time_h:get()).." Source: "..tostring(contacts[i].source_h:get()))
             -- debug_print(i.." Raw Azimuth: "..tostring(contacts[i].azimuth_h:get()).." Heading: "..tostring(math.deg(contacts[i].azimuth_h:get())))
             -- debug_print(i.." Raw Elevation: "..tostring(contacts[i].elevation_h:get()).." Elevation: "..tostring(math.deg(contacts[i].elevation_h:get())))
-        end
+        -- end
         
         -- get aircraft current heading
         aircraft_heading_deg    = math.deg(sensor_data.getMagneticHeading())
@@ -99,16 +102,32 @@ function update()
                 end
             end
         end
-
+        local was_shrike_locked = shrike_lock
         shrike_lock = false
+        local highestPowerLock = nil  
+        
         -- sort through target list and get deviations
         for i, target in pairs(shrike_targets) do
             -- check contact is still valid based on time last updated.
             if (current_time - target.time_stored) < target_expire_time then
                 if checkShrikeLock(target) then
-                    shrike_lock = true
+                    if highestPowerLock == nil or target.power > highestPowerLock.power then
+                        highestPowerLock = target
+                    end
                 end
             end
+        end
+        
+        -- lock on the higest power target
+        if highestPowerLock ~= nil then
+            shrike_lock_volume = (((3 - (get_absolute_model_time() - highestPowerLock.time_stored)) / 3) * 0.6) + 0.4
+            setAdiNeedlesIfNeeded(highestPowerLock)
+            shrike_lock = true
+        end
+
+        -- release needles if old target was released and no new target locked
+        if shrike_seeker_installed and was_shrike_locked and not shrike_lock then 
+            adi_needles_api:releaseNeedles(devices.SHRIKE)
         end
 
     end -- check power is available
@@ -116,6 +135,14 @@ function update()
     -- update search volume with deviation
     update_lock_volume()
 
+end
+
+function setAdiNeedlesIfNeeded(target)
+    if shrike_seeker_installed and shrikeIsArmedAndOn() then 
+        local loc = math.rad(target.heading - aircraft_heading_deg)
+        local gs = math.rad(target.elevation - aircraft_pitch_deg)
+        adi_needles_api:setTarget(devices.SHRIKE, gs, loc)
+    end
 end
 
 function SetCommand(command, value)
@@ -128,7 +155,8 @@ function updateTargetData(id, contact, current_time)
         ['raw_elevation']   = contact.elevation_h:get(),
         ['heading']         = getTargetHeading(math.deg(contact.azimuth_h:get()), aircraft_heading_deg),
         ['elevation']       = getTargetElevation(math.deg(contact.elevation_h:get()), aircraft_pitch_deg),
-        ['time_stored']     = current_time
+        ['time_stored']     = current_time,
+        ['power']           = contact.power_h:get()
     }
     -- debug_print(contact.source_h:get().."Heading: "..target_data['heading'])
     shrike_targets[id] = target_data
@@ -142,12 +170,7 @@ function checkShrikeLock(target)
     local vert_deviation = math.abs((target.elevation + 4) - aircraft_pitch_deg)
 
     -- check if deviation is within params for a shrike lock
-    if horz_deviation < (SHRIKE_HORZ_FOV/2) and vert_deviation < (SHRIKE_VERT_FOV/2) then
-        shrike_lock_volume = (((3 - (get_absolute_model_time() - target.time_stored)) / 3) * 0.6) + 0.4
-        return true
-    else
-        return false
-    end
+    return horz_deviation < (SHRIKE_HORZ_FOV/2) and vert_deviation < (SHRIKE_VERT_FOV/2)
 end
 
 function getTargetHeading(target_azimuth_deg, aircraft_heading)
@@ -164,10 +187,12 @@ function getTargetElevation(target_elevation_deg, aircraft_pitch)
     return aircraft_pitch + target_elevation_deg
 end
 
+function shrikeIsArmedAndOn() 
+    return shrike_armed_param:get() == 1 and (get_elec_aft_mon_ac_ok() and get_elec_mon_dc_ok())
+end
+
 function update_lock_volume()
-
-    if shrike_armed_param:get() == 1 and (get_elec_aft_mon_ac_ok() and get_elec_mon_dc_ok()) then
-
+    if shrikeIsArmedAndOn() then
         --print_message_to_user('Shrike Volume: '..(shrike_sidewinder_volume:get()+1)*0.5)
         local new_shrike_volume_normalized = (shrike_sidewinder_volume:get()+1)*0.12 + 0.01
         snd_shrike_tone:update(nil, new_shrike_volume_normalized*0.25, nil)
