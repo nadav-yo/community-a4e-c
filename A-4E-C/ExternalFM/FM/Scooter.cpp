@@ -334,8 +334,8 @@ void ed_fm_add_local_moment(double & x,double &y,double &z)
 
 void ed_fm_simulate(double dt)
 {
-	//if ( ! g_safeToRun )
-		//return;
+	if ( ! g_safeToRun )
+		return;
 
 	Logger::time( dt );
 
@@ -509,7 +509,7 @@ void ed_fm_set_current_mass_state
 	
 	s_airframe->setMass(mass);
 	Vec3 com = Vec3( center_of_mass_x, center_of_mass_y, center_of_mass_z );
-	//printf( "COM: %lf, %lf, %lf\n", com.x,com.y,com.z );
+	//printf( "M: %lf | COM: %lf,%lf,%lf | MOI: %lf,%lf,%lf\n", mass, com.x,com.y,com.z, moment_of_inertia_x, moment_of_inertia_y, moment_of_inertia_z );
 	s_state->setCOM( com );
 	s_fm->setCOM(com);
 }
@@ -768,7 +768,6 @@ void ed_fm_set_command
 		//ed_fm_on_damage( (int)Scooter::Airframe::Damage::FUSELAGE_BOTTOM, 0.5 );
 		//ed_fm_on_damage( (int)Scooter::Airframe::Damage::NOSE_CENTER, 0.8 );
 		//ed_fm_on_damage( (int)Scooter::Airframe::Damage::NOSE_LEFT_SIDE, 0.8 );
-		Scooter::DamageProcessor::GetDamageProcessor().SetFailure( "Engine", 0.8 );
 		//ed_fm_on_damage( (int)Scooter::Airframe::Damage::FUSELAGE_BOTTOM, 0.4 );
 		
 		break;
